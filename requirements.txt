@@ -1,5 +1,7 @@
 streamlit
 pandas
-requests
-certifi
+cloudscraper
+beautifulsoup4
+lxml
+
 
