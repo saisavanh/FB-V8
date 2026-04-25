@@ -1,53 +1,71 @@
 import streamlit as st
 import pandas as pd
 import requests
+from datetime import datetime
 
 # ຕັ້ງຄ່າໜ້າເວັບ
-st.set_page_config(page_title="ຕາຕະລາງບານເຕະ", page_icon="⚽")
-st.title("⚽ ຕາຕະລາງການແຂ່ງຂັນບານເຕະວັນນີ້")
+st.set_page_config(page_title="ຕາຕະລາງບານເຕະວັນນີ້", page_icon="⚽", layout="wide")
 
-def draw_data():
-    # ໃຊ້ API Link ໂດຍກົງຈາກ Goal7 (ອັນນີ້ຈະໄດ້ຂໍ້ມູນແນ່ນອນ)
-    api_url = "https://goal7.co" 
+# ສ່ວນຫົວຂອງເວັບໄຊ້
+st.markdown("<h1 style='text-align: center; color: #1E88E5;'>⚽ ຕາຕະລາງການແຂ່ງຂັນບານເຕະວັນນີ້</h1>", unsafe_allow_html=True)
+st.write("<p style='text-align: center;'>ຂໍ້ມູນອັບເດດສົດໆຈາກ Global Football API</p>", unsafe_allow_html=True)
+
+# ໃສ່ API Key ຂອງທ່ານ
+API_KEY = "6ed39fc3009f490997ee50b620f01b4c"
+
+def get_matches():
+    url = "https://football-data.org"
+    headers = { 'X-Auth-Token': API_KEY }
     
-    # ຖ້າ API ເທິງບໍ່ເຮັດວຽກ ເຮົາຈະໃຊ້ວິທີດຶງຈາກ JSON ທີ່ຊ່ອນຢູ່ໃນເວັບ
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://goal7.co"
-    }
-
     try:
-        # ລອງດຶງຂໍ້ມູນແບບ JSON
-        response = requests.get(api_url, headers=headers, timeout=15)
-        
+        response = requests.get(url, headers=headers, timeout=15)
         if response.status_code == 200:
             data = response.json()
-            # ແປງຂໍ້ມູນ JSON ເປັນ DataFrame (ຈັດລຽງຖັນໃຫ້ງາມ)
-            df = pd.DataFrame(data['data']) # ປັບຕາມໂຄງສ້າງ JSON ຂອງເຂົາເຈົ້າ
-            return df
+            matches = data.get('matches', [])
+            
+            if not matches:
+                return "ມື້ນີ້ຍັງບໍ່ມີລາຍການແຂ່ງຂັນທີ່ຮອງຮັບ."
+            
+            match_list = []
+            for m in matches:
+                # ແປງເວລາ UTC ເປັນເວລາທີ່ອ່ານງ່າຍ
+                dt = datetime.strptime(m['utcDate'], "%Y-%m-%dT%H:%M:%SZ")
+                thai_time = dt.strftime("%H:%M") # ເວລາແຂ່ງ
+                
+                match_list.append({
+                    "ເວລາ": thai_time,
+                    "ລີກ / ລາຍການ": m['competition']['name'],
+                    "ທີມເຈົ້າບ້ານ": f"🏠 {m['homeTeam']['name']}",
+                    "VS": "ພົບກັບ",
+                    "ທີມຢ້ຽມຢາມ": f"🚀 {m['awayTeam']['name']}",
+                    "ສະຖານະ": m['status']
+                })
+            return pd.DataFrame(match_list)
+        elif response.status_code == 429:
+            return "Error: ທ່ານກົດອັບເດດໄວເກີນໄປ (ກະລຸນາລໍຖ້າ 1 ນາທີ)."
         else:
-            # ຖ້າ API ໂດຍກົງບໍ່ໄດ້, ໃຫ້ໃຊ້ວິທີອ່ານ HTML ແບບລະອຽດ
-            url = "https://goal7.co%E0%B8%95%E0%B8%B2%E0%B8%A3%E0%B8%B2%E0%B8%87%E0%B8%9A%E0%B8%AD%E0%B8%A5%E0%B8%A7%E0%B8%B1%E0%B8%99%E0%B8%99%E0%B8%B5%E0%B9%89/"
-            all_tables = pd.read_html(url, encoding='utf-8')
-            if len(all_tables) > 0:
-                return all_tables[0] # ເອົາຕາຕະລາງທຳອິດທີ່ພົບ
-            return "ບໍ່ພົບຂໍ້ມູນຕາຕະລາງ"
-
+            return f"ບໍ່ສາມາດດຶງຂໍ້ມູນໄດ້ (Error {response.status_code})"
     except Exception as e:
-        return f"ເກີດຂໍ້ຜິດພາດ: ລະບົບປ້ອງກັນການດຶງຂໍ້ມູນ ຫຼື ໂຄງສ້າງເວັບປ່ຽນແປງ"
+        return f"ເກີດຂໍ້ຜິດພາດ: {e}"
 
-if st.button('🔄 ອັບເດດຂໍ້ມູນ'):
-    with st.spinner('ກຳລັງໂຫຼດ...'):
-        result = draw_data()
-        
+# ສ້າງປຸ່ມອັບເດດ
+col1, col2, col3 = st.columns([1, 1, 1])
+with col2:
+    update_btn = st.button('🔄 ກົດເພື່ອເບິ່ງຕາຕະລາງໃໝ່', use_container_width=True)
+
+if update_btn:
+    with st.spinner('ກຳລັງໂຫຼດຂໍ້ມູນ...'):
+        result = get_matches()
         if isinstance(result, pd.DataFrame):
-            st.success("ດຶງຂໍ້ມູນສຳເລັດ!")
-            # ປັບແຕ່ງການສະແດງຜົນໃຫ້ເບິ່ງງ່າຍ
-            st.dataframe(result, use_container_width=True)
+            st.success(f"ພົບການແຂ່ງຂັນທັງໝົດ {len(result)} ຄູ່")
+            # ສະແດງຕາຕະລາງແບບບໍ່ມີ Index ເພື່ອໃຫ້ງາມ
+            st.table(result)
         else:
             st.error(result)
-            st.info("💡 ແນະນຳ: ລອງກົດປຸ່ມ 'ອັບເດດ' ອີກຄັ້ງ ຫຼື ກວດສອບອິນເຕີເນັດ")
+else:
+    st.info("ກະລຸນາກົດປຸ່ມ 'ອັບເດດ' ດ້ານເທິງເພື່ອດຶງຂໍ້ມູນການແຂ່ງຂັນຂອງມື້ນີ້.")
 
+# ສ່ວນທ້າຍ
 st.markdown("---")
-st.caption("ຂໍ້ມູນຈາກ Goal7 | ອັບເດດອັດຕະໂນມັດ")
+st.markdown("<p style='text-align: center; color: gray;'>ພັດທະນາດ້ວຍ Streamlit | ຂໍ້ມູນຈາກ Football-Data.org</p>", unsafe_allow_html=True)
 
