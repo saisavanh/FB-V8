@@ -1,61 +1,61 @@
 import streamlit as st
 import pandas as pd
 import requests
-from datetime import datetime, timedelta
-import urllib3
+from bs4 import BeautifulSoup
+from io import StringIO
 
-# ປິດຄຳເຕືອນ SSL
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# ຕັ້ງຄ່າໜ້າເວັບ
+st.set_page_config(page_title="ຕາຕະລາງບານ Goal7", page_icon="⚽")
+st.title("⚽ ຕາຕະລາງການແຂ່ງຂັນຈາກ Goal7")
 
-st.set_page_config(page_title="ຕາຕະລາງບານເຕະ", page_icon="⚽")
-st.title("⚽ ຕາຕະລາງການແຂ່ງຂັນວັນນີ້")
-
-API_KEY = "6ed39fc3009f490997ee50b620f01b4c"
-
-def get_matches():
-    url = "https://football-data.org"
-    headers = { 'X-Auth-Token': API_KEY }
+def draw_goal7_data():
+    url = "https://goal7.co/%E0%B8%95%E0%B8%B2%E0%B8%A3%E0%B8%B2%E0%B8%87%E0%B8%9A%E0%B8%AD%E0%B8%A5%E0%B8%A7%E0%B8%B1%E0%B8%99%E0%B8%99%E0%B8%B5%E0%B9%89/"
     
+    # ໃສ່ Header ເພື່ອປອມຕົວເປັນ Browser ປ້ອງກັນການຖືກບລັອກ
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7"
+    }
+
     try:
-        # ລອງດຶງຂໍ້ມູນດ້ວຍ Timeout ທີ່ດົນຂຶ້ນ
-        response = requests.get(url, headers=headers, timeout=25, verify=False)
+        # ດຶງຂໍ້ມູນ HTML ຈາກເວັບໄຊ້
+        response = requests.get(url, headers=headers, timeout=20)
+        response.encoding = 'utf-8' # ໃຫ້ຮອງຮັບພາສາໄທ/ລາວ
         
         if response.status_code == 200:
-            data = response.json()
-            matches = data.get('matches', [])
+            # ໃຊ້ Pandas ອ່ານຕາຕະລາງຈາກ HTML ໂດຍກົງ
+            # ໃສ່ StringIO ເພື່ອປ້ອງກັນ Error ເລື່ອງການອ່ານ string
+            tables = pd.read_html(StringIO(response.text))
             
-            if not matches:
-                return "ມື້ນີ້ຍັງບໍ່ມີການແຂ່ງຂັນໃນລະບົບ."
-            
-            match_list = []
-            for m in matches:
-                utc_dt = datetime.strptime(m['utcDate'], "%Y-%m-%dT%H:%M:%SZ")
-                lao_time = (utc_dt + timedelta(hours=7)).strftime("%H:%M")
+            if len(tables) > 0:
+                # ປົກກະຕິຕາຕະລາງບານຈະຢູ່ Index 0 ຫຼື 1
+                df = tables[0] 
                 
-                match_list.append({
-                    "ເວລາ": lao_time,
-                    "ລີກ": m['competition']['name'],
-                    "ຄູ່ແຂ່ງ": f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}",
-                    "ສະຖານະ": m['status']
-                })
-            return pd.DataFrame(match_list)
+                # ປ່ຽນຊື່ຫົວຂໍ້ເປັນພາສາລາວ (ຖ້າຈຳນວນຖັນກົງກັນ)
+                if len(df.columns) >= 5:
+                    df.columns = ['ເວລາ', 'ລີກ', 'ທີມເຈົ້າບ້ານ', 'ລາຄາ', 'ທີມຢ້ຽມຢາມ', 'ຊ່ອງຖ່າຍທອດ'][:len(df.columns)]
+                
+                return df
+            else:
+                return "ບໍ່ພົບຕາຕະລາງຂໍ້ມູນໃນໜ້າເວັບ Goal7"
         else:
-            return f"API ບໍ່ຕອບສະໜອງ (Code: {response.status_code})"
+            return f"ບໍ່ສາມາດເຂົ້າເຖິງເວັບໄຊ້ໄດ້ (Code: {response.status_code})"
             
     except Exception as e:
-        # ຖ້າເຊື່ອມຕໍ່ບໍ່ໄດ້ແທ້ໆ ໃຫ້ສະແດງຂໍ້ຄວາມແນະນຳ
-        return "ບໍ່ສາມາດເຊື່ອມຕໍ່ກັບ API ໄດ້ໃນຂະນະນີ້. ກະລຸນາລອງໃໝ່ໃນອີກ 1-2 ນາທີ."
+        return f"ເກີດຂໍ້ຜິດພາດ: {str(e)}"
 
-if st.button('🔄 ອັບເດດຕາຕະລາງ'):
-    with st.spinner('ກຳລັງເຊື່ອມຕໍ່ກັບ API...'):
-        result = get_matches()
+# ປຸ່ມກົດອັບເດດ
+if st.button('🔄 ດຶງຂໍ້ມູນຈາກ Goal7'):
+    with st.spinner('ກຳລັງໂຫຼດຂໍ້ມູນ...'):
+        result = draw_goal7_data()
+        
         if isinstance(result, pd.DataFrame):
             st.success("ດຶງຂໍ້ມູນສຳເລັດ!")
             st.dataframe(result, use_container_width=True)
         else:
-            st.warning(result)
-            st.info("💡 ຄຳແນະນຳ: ຖ້າຍັງບໍ່ໄດ້, ໃຫ້ໄປທີ່ 'Manage app' ແລ້ວເລືອກ 'Reboot app' ເພື່ອລ້າງ Error ຂອງ Server.")
+            st.error(result)
+            st.info("💡 ຄຳແນະນຳ: ຖ້າຂຶ້ນ Error 403 ໝາຍຄວາມວ່າເວັບໄຊ້ບລັອກ Server ຂອງ Streamlit.")
 
 st.divider()
-st.caption("ຂໍ້ມູນຈາກ football-data.org | ເວລາລາວ GMT+7")
+st.caption("ແຫຼ່ງຂໍ້ມູນ: Goal7.co | ພັດທະນາດ້ວຍ Streamlit")
 
