@@ -1,80 +1,90 @@
 import streamlit as st
 import pandas as pd
 import cloudscraper
-from io import StringIO
+from bs4 import BeautifulSoup
 from datetime import datetime
 
-st.set_page_config(page_title="Goal7 Odds Exporter", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="Goal7 Odds Crawler", page_icon="⚽", layout="wide")
+st.title("⚽ ດຶງຕາຕະລາງບານ ແລະ ລາຄາ (AH, OU, 1x2)")
 
-st.title("⚽ ລະບົບດຶງຕາຕະລາງ ແລະ ອັດຕາຕໍ່ລອງ Goal7")
-st.write("ຂໍ້ມູນທີ່ດຶງ: 1x2, Asian Handicap (AH), ແລະ Over/Under (OU)")
-
-def get_goal7_odds():
-    url = "https://goal7.co/%E0%B8%95%E0%B8%B2%E0%B8%A3%E0%B8%B2%E0%B8%87%E0%B8%9A%E0%B8%AD%E0%B8%A5%E0%B8%A7%E0%B8%B1%E0%B8%99%E0%B8%99%E0%B8%B5%E0%B9%89/"
+def scrape_goal7_detailed():
+    url = "https://goal7.co"
     
     try:
-        # ໃຊ້ cloudscraper ເພື່ອຂ້າມ Cloudflare
         scraper = cloudscraper.create_scraper()
         response = scraper.get(url, timeout=30)
         response.encoding = 'utf-8'
         
-        if response.status_code == 200:
-            # ອ່ານຕາຕະລາງ HTML
-            tables = pd.read_html(StringIO(response.text))
-            
-            if len(tables) > 0:
-                # ເລືອກຕາຕະລາງການແຂ່ງຂັນ (ຕາຕະລາງທີ່ມີແຖວຫຼາຍສຸດ)
-                df = max(tables, key=len)
+        if response.status_code != 200:
+            return f"Error {response.status_code}: ຖືກບລັອກການເຂົ້າເຖິງ"
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        # ຊອກຫາຕາຕະລາງການແຂ່ງຂັນ
+        table = soup.find('table') 
+        if not table:
+            return "ບໍ່ພົບຕາຕະລາງຂໍ້ມູນໃນໜ້າເວັບ"
+
+        rows = table.find_all('tr')
+        all_matches = []
+        current_league = "ທົ່ວໄປ"
+
+        for row in rows:
+            # ກວດສອບວ່າແມ່ນແຖວຂອງ "ລີກ" ຫຼື ບໍ່
+            league_row = row.find('td', class_='league_name') or row.find('th')
+            if league_row:
+                current_league = league_row.get_text(strip=True)
+                continue
+
+            cols = row.find_all('td')
+            if len(cols) >= 5:
+                # ດຶງຂໍ້ມູນແຕ່ລະຊ່ອງ
+                time = cols[0].get_text(strip=True)
+                home_team = cols[2].get_text(strip=True)
                 
-                # --- ສ່ວນການເລືອກຖັນ (Goal7 ປົກກະຕິມີ 12 ຖັນ) ---
-                # ເຮົາຈະເລືອກເອົາຖັນທີ່ກ່ຽວຂ້ອງກັບລາຄາ AH, 1x2, OU
-                # ໝາຍເຫດ: Index ຂອງຖັນອາດປ່ຽນແປງຕາມເວັບໄຊ້, ເຮົາຈະເລືອກຖັນຫຼັກໆດັ່ງນີ້:
+                # --- ເຈາະດຶງລາຄາ AH ແລະ OU (ປົກກະຕິຢູ່ຖັນທີ 4) ---
+                odds_col = cols[3]
+                # Goal7 ມັກແຍກ AH ແລະ OU ດ້ວຍ <br> ຫຼື <span>
+                odds_text = odds_col.get_text(" | ", strip=True) 
                 
-                # ຕົວຢ່າງການເລືອກຖັນ (ປັບຕາມໂຄງສ້າງ Goal7 ຕົວຈິງ)
-                # ຖັນ 0: ເວລາ, 1: ລີກ, 2: ເຈົ້າບ້ານ, 3: ລາຄາ AH/OU, 4: ທີມຢ້ຽມ, 11: 1x2
+                away_team = cols[4].get_text(strip=True)
                 
-                # ເພື່ອໃຫ້ແນ່ນອນ ເຮົາຈະດຶງມາທັງໝົດກ່ອນ ແລ້ວໃຫ້ຜູ້ໃຊ້ເລືອກ ຫຼື ຕັດໃຫ້ເຫຼືອແຕ່ທີ່ຕ້ອງການ
-                # ໃນທີ່ນີ້ຂ້ອຍຈະຕັ້ງຊື່ໃຫ້ໃໝ່ຕາມທີ່ທ່ານຕ້ອງການ:
-                new_df = df.copy()
-                
-                # ສ້າງ DataFrame ໃໝ່ທີ່ມີແຕ່ຂໍ້ມູນທີ່ທ່ານຕ້ອງການ
-                final_df = pd.DataFrame()
-                final_df['ເວລາ'] = new_df.iloc[:, 0]
-                final_df['ລີກ'] = new_df.iloc[:, 1]
-                final_df['ຄູ່ແຂ່ງ'] = new_df.iloc[:, 2] + " vs " + new_df.iloc[:, 4]
-                final_df['ອັດຕາຕໍ່ລອງ (AH/OU)'] = new_df.iloc[:, 3] # ສ່ວນຫຼາຍ Goal7 ລວມ AH/OU ໄວ້ຖັນດຽວກັນ
-                final_df['ລາຄາ 1x2'] = new_df.iloc[:, -1] # ຖັນສຸດທ້າຍມັກຈະແມ່ນ 1x2 ຫຼື ຊ່ອງຖ່າຍທອດ
-                
-                return final_df
-            else:
-                return "ບໍ່ພົບຂໍ້ມູນຕາຕະລາງ."
-        else:
-            return f"Error {response.status_code}: ເວັບໄຊ້ບລັອກການເຂົ້າເຖິງ."
+                # --- ເຈາະດຶງລາຄາ 1x2 (ປົກກະຕິຢູ່ຖັນທ້າຍໆ) ---
+                odds_1x2 = ""
+                if len(cols) >= 10:
+                    odds_1x2 = cols[-1].get_text(strip=True)
+
+                all_matches.append({
+                    "ເວລາ": time,
+                    "ລີກ": current_league,
+                    "ທີມເຈົ້າບ້ານ": home_team,
+                    "ລາຄາ AH / OU": odds_text,
+                    "ທີມຢ້ຽມຢາມ": away_team,
+                    "ລາຄາ 1x2": odds_1x2
+                })
+
+        return pd.DataFrame(all_matches)
+
     except Exception as e:
         return f"ເກີດຂໍ້ຜິດພາດ: {str(e)}"
 
-# ປຸ່ມດຶງຂໍ້ມູນ
-if st.button('🚀 ດຶງຂໍ້ມູນອັດຕາຕໍ່ລອງທຸກຄູ່'):
-    with st.spinner('ກຳລັງດຶງຂໍ້ມູນຈາກ Goal7...'):
-        data = get_goal7_odds()
+# ສ່ວນສະແດງຜົນ
+if st.button('🚀 ເລີ່ມດຶງຂໍ້ມູນພ້ອມລາຄາ'):
+    with st.spinner('ກຳລັງດຶງຂໍ້ມູນລາຄາ AH, OU, 1x2...'):
+        df = scrape_goal7_detailed()
         
-        if isinstance(data, pd.DataFrame):
-            st.success(f"ດຶງຂໍ້ມູນສຳເລັດ! ພົບທັງໝົດ {len(data)} ຄູ່")
-            
-            # ສະແດງຕາຕະລາງ
-            st.dataframe(data, use_container_width=True)
-            
-            # ປຸ່ມ Download CSV
-            csv = data.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 ດາວໂຫລດໄຟລ໌ CSV ສຳລັບວິເຄາະ",
-                data=csv,
-                file_name=f'goal7_odds_{datetime.now().strftime("%Y%m%d")}.csv',
-                mime='text/csv',
-            )
+        if isinstance(df, pd.DataFrame):
+            if not df.empty:
+                st.success(f"ດຶງຂໍ້ມູນສຳເລັດ! ພົບ {len(df)} ຄູ່")
+                st.dataframe(df, use_container_width=True)
+                
+                # ປຸ່ມ Download
+                csv = df.to_csv(index=False).encode('utf-8-sig')
+                st.download_button("📥 ດາວໂຫລດໄຟລ໌ CSV ເພື່ອວິເຄາະ", csv, "goal7_odds_full.csv", "text/csv")
+            else:
+                st.warning("ດຶງຂໍ້ມູນໄດ້ແຕ່ບໍ່ພົບລາຍການແຂ່ງຂັນ.")
         else:
-            st.error(data)
+            st.error(df)
 
 st.divider()
-st.info("💡 ຄຳແນະນຳ: ຖ້າຂໍ້ມູນໃນຖັນບໍ່ກົງ, ທ່ານສາມາດບອກໃຫ້ຂ້ອຍປັບ Index ຂອງຖັນໃໝ່ໄດ້ ຫຼັງຈາກທີ່ທ່ານເຫັນຜົນລັດທຳອິດ.")
+st.caption("ຂໍ້ມູນຈາກ Goal7 | ໃຊ້ BeautifulSoup ເພື່ອເຈາະດຶງລາຄາໂດຍກົງ")
 
