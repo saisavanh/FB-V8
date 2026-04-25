@@ -1,46 +1,75 @@
 import streamlit as st
 import pandas as pd
 import requests
-from io import StringIO
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Goal7 Table", page_icon="⚽")
-st.title("⚽ ຕາຕະລາງການແຂ່ງຂັນຈາກ Goal7")
+st.set_page_config(page_title="Football Data Analysis", page_icon="📊", layout="wide")
 
-def draw_goal7_data():
-    url = "https://goal7.co"
+st.title("📊 ລະບົບດຶງຂໍ້ມູນບານເຕະເພື່ອການວິເຄາະ")
+st.write("ດຶງຂໍ້ມູນ: ລາຄາ, ສະຖິຕິ, ແລະ ຜົນການແຂ່ງຂັນສົດ")
+
+# ໃສ່ RapidAPI Key ຂອງທ່ານ (ສະໝັກຟຣີໄດ້ທີ່ ://rapidapi.com)
+RAPID_API_KEY = "ໃສ່_API_KEY_ຂອງທ່ານ_ຢູ່ບ່ອນນີ້"
+
+def get_all_data():
+    url = "https://rapidapi.com"
+    
+    # ຕັ້ງຄ່າດຶງຂໍ້ມູນມື້ນີ້
+    today = (datetime.now() + timedelta(hours=7)).strftime('%Y-%m-%d')
+    
+    querystring = {"date": today}
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "X-RapidAPI-Key": RAPID_API_KEY,
+        "X-RapidAPI-Host": "://rapidapi.com"
     }
 
     try:
-        response = requests.get(url, headers=headers, timeout=20)
-        response.encoding = 'utf-8'
-        
+        response = requests.get(url, headers=headers, params=querystring, timeout=20)
         if response.status_code == 200:
-            # ດຶງຕາຕະລາງທັງໝົດອອກມາ
-            tables = pd.read_html(StringIO(response.text))
+            data = response.json()
+            fixtures = data.get('response', [])
             
-            if len(tables) > 0:
-                # ເລືອກຕາຕະລາງທີ່ຄິດວ່າແມ່ນຕາຕະລາງບານ (ປົກກະຕິແມ່ນຕາຕະລາງທີ່ມີຂໍ້ມູນຫຼາຍທີ່ສຸດ)
-                df = max(tables, key=len)
-                return df
-            else:
-                return "ບໍ່ພົບຕາຕະລາງຂໍ້ມູນ."
+            all_data = []
+            for f in fixtures:
+                all_data.append({
+                    "Fixture_ID": f['fixture']['id'],
+                    "Time": f['fixture']['date'],
+                    "League": f['league']['name'],
+                    "Country": f['league']['country'],
+                    "Home_Team": f['teams']['home']['name'],
+                    "Away_Team": f['teams']['away']['name'],
+                    "Status": f['fixture']['status']['long'],
+                    "Home_Score": f['goals']['home'],
+                    "Away_Score": f['goals']['away'],
+                    "Venue": f['fixture']['venue']['name']
+                })
+            return pd.DataFrame(all_data)
         else:
-            return f"Error {response.status_code}: ເວັບໄຊ້ບລັອກການເຂົ້າເຖິງ."
-    except Exception as e:
-        return f"ເກີດຂໍ້ຜິດພາດ: {str(e)}"
+            return None
+    except:
+        return None
 
-if st.button('🔄 ດຶງຂໍ້ມູນໃໝ່'):
-    with st.spinner('ກຳລັງດຶງຂໍ້ມູນ...'):
-        result = draw_goal7_data()
-        if isinstance(result, pd.DataFrame):
-            st.success("ດຶງຂໍ້ມູນສຳເລັດ!")
-            # ສະແດງຕາຕະລາງທັງໝົດທີ່ດຶງມາໄດ້ໂດຍບໍ່ຕ້ອງກຳນົດຊື່ຖັນ
-            st.dataframe(result, use_container_width=True)
+# ສ່ວນການສະແດງຜົນ ແລະ Download
+if st.button('🚀 ເລີ່ມດຶງຂໍ້ມູນທັງໝົດ'):
+    with st.spinner('ກຳລັງປະມວນຜົນຂໍ້ມູນ...'):
+        df = get_all_data()
+        
+        if df is not None and not df.empty:
+            st.success(f"ດຶງຂໍ້ມູນສຳເລັດທັງໝົດ {len(df)} ຄູ່!")
+            
+            # ສະແດງຕົວຢ່າງຂໍ້ມູນ
+            st.dataframe(df)
+
+            # ສ້າງປຸ່ມ Download CSV
+            csv = df.to_csv(index=False).encode('utf-8-sig') # ໃຊ້ utf-8-sig ເພື່ອໃຫ້ Excel ອ່ານພາສາລາວ/ໄທໄດ້
+            st.download_button(
+                label="📥 ດາວໂຫລດຂໍ້ມູນເປັນ CSV (ສຳລັບ Excel)",
+                data=csv,
+                file_name=f'football_analysis_{datetime.now().strftime("%Y%m%d")}.csv',
+                mime='text/csv',
+            )
         else:
-            st.error(result)
+            st.error("ບໍ່ສາມາດດຶງຂໍ້ມູນໄດ້. ກະລຸນາກວດສອບ API Key ຫຼື ການເຊື່ອມຕໍ່.")
 
-st.divider()
-st.caption("ແຫຼ່ງຂໍ້ມູນ: Goal7.co | ພັດທະນາດ້ວຍ Streamlit")
+st.info("💡 ໝາຍເຫດ: ຂໍ້ມູນນີ້ລວມເອົາ Fixture ID ເຊິ່ງທ່ານສາມາດເອົາໄປດຶງ 'ສະຖິຕິລະອຽດ' (Stats) ຫຼື 'ລາຄາ' (Odds) ຕໍ່ໄດ້.")
 
