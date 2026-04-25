@@ -2,31 +2,26 @@ import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
+import certifi
 
-# ຕັ້ງຄ່າໜ້າເວັບ
 st.set_page_config(page_title="ຕາຕະລາງບານເຕະ", page_icon="⚽")
+st.title("⚽ ຕາຕະລາງບານເຕະວັນນີ້")
 
-st.markdown("<h1 style='text-align: center;'>⚽ ຕາຕະລາງບານເຕະວັນນີ້</h1>", unsafe_allow_html=True)
-
-# API Key ຂອງທ່ານ
 API_KEY = "6ed39fc3009f490997ee50b620f01b4c"
 
 def get_matches():
-    # ປ່ຽນ URL ເປັນ http ເພື່ອຫຼີກລ່ຽງບັນຫາ SSL Certificate verify failed
-    url = "http://football-data.org"
+    # ປ່ຽນກັບມາໃຊ້ https ແລະ ໃຊ້ certifi ເພື່ອຢືນຢັນ SSL ໃຫ້ຖືກຕ້ອງ
+    url = "https://football-data.org"
     headers = { 'X-Auth-Token': API_KEY }
     
     try:
-        # ໃຊ້ verify=False ແລະ ຈັດການ Header ໃຫ້ເໝືອນ Browser ທົ່ວໄປ
-        response = requests.get(url, headers=headers, timeout=20, verify=False)
+        # ໃຊ້ verify=certifi.where() ເພື່ອແກ້ Error SSL ແບບປອດໄພ
+        response = requests.get(url, headers=headers, timeout=20, verify=certifi.where())
         
         if response.status_code == 200:
-            try:
-                data = response.json()
-            except:
-                return "Error: ເຊີເວີສົ່ງຂໍ້ມູນມາຜິດຮູບແບບ (ບໍ່ແມ່ນ JSON)"
-
+            data = response.json()
             matches = data.get('matches', [])
+            
             if not matches:
                 return "ມື້ນີ້ບໍ່ມີການແຂ່ງຂັນໃນລີກທີ່ຮອງຮັບ."
             
@@ -42,10 +37,8 @@ def get_matches():
                     "ສະຖານະ": m['status']
                 })
             return pd.DataFrame(match_list)
-        elif response.status_code == 429:
-            return "ກະລຸນາລໍຖ້າ 1 ນາທີ (API ໃຫ້ດຶງຂໍ້ມູນຈຳກັດ)"
         else:
-            return f"ເຊີເວີຕອບກັບດ້ວຍ Code: {response.status_code}"
+            return f"ເຊີເວີຕອບກັບດ້ວຍ Code: {response.status_code} (ອາດຈະຖືກບລັອກຊົ່ວຄາວ)"
             
     except Exception as e:
         return f"ເກີດຂໍ້ຜິດພາດ: {str(e)}"
@@ -55,7 +48,7 @@ if st.button('🔄 ອັບເດດຂໍ້ມູນ'):
         result = get_matches()
         if isinstance(result, pd.DataFrame):
             st.success("ດຶງຂໍ້ມູນສຳເລັດ!")
-            st.dataframe(result, use_container_width=True)
+            st.table(result) # ໃຊ້ table ຈະສະແດງຜົນໄດ້ຄົບຖ້ວນກວ່າໃນມືຖື
         else:
             st.error(result)
 
