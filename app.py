@@ -2,89 +2,62 @@ import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
-import urllib3
-
-# ປິດການແຈ້ງເຕືອນເລື່ອງ SSL ທີ່ບໍ່ປອດໄພ (ເພື່ອບໍ່ໃຫ້ມັນຂຶ້ນມາເຕືອນໃນໜ້າເວັບ)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ຕັ້ງຄ່າໜ້າເວັບ
-st.set_page_config(page_title="ຕາຕະລາງບານເຕະວັນນີ້", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="ຕາຕະລາງບານເຕະ", page_icon="⚽")
 
-# ສ່ວນຫົວຂອງເວັບໄຊ້
-st.markdown("<h1 style='text-align: center; color: #1E88E5;'>⚽ ຕາຕະລາງການແຂ່ງຂັນບານເຕະວັນນີ້</h1>", unsafe_allow_html=True)
-st.write("<p style='text-align: center;'>ຂໍ້ມູນອັບເດດສົດໆ (ເວລາປະເທດລາວ 🇱🇦)</p>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center;'>⚽ ຕາຕະລາງບານເຕະວັນນີ້</h1>", unsafe_allow_html=True)
 
 # API Key ຂອງທ່ານ
 API_KEY = "6ed39fc3009f490997ee50b620f01b4c"
 
 def get_matches():
-    url = "https://football-data.org"
+    # ປ່ຽນ URL ເປັນ http ເພື່ອຫຼີກລ່ຽງບັນຫາ SSL Certificate verify failed
+    url = "http://football-data.org"
     headers = { 'X-Auth-Token': API_KEY }
     
     try:
-        # ໃຊ້ verify=False ເພື່ອແກ້ Error SSL Certificate Verify Failed
-        response = requests.get(url, headers=headers, timeout=15, verify=False)
+        # ໃຊ້ verify=False ແລະ ຈັດການ Header ໃຫ້ເໝືອນ Browser ທົ່ວໄປ
+        response = requests.get(url, headers=headers, timeout=20, verify=False)
         
         if response.status_code == 200:
-            data = response.json()
+            try:
+                data = response.json()
+            except:
+                return "Error: ເຊີເວີສົ່ງຂໍ້ມູນມາຜິດຮູບແບບ (ບໍ່ແມ່ນ JSON)"
+
             matches = data.get('matches', [])
-            
             if not matches:
-                return "ມື້ນີ້ຍັງບໍ່ມີລາຍການແຂ່ງຂັນທີ່ຮອງຮັບໃນລະບົບຟຣີ."
+                return "ມື້ນີ້ບໍ່ມີການແຂ່ງຂັນໃນລີກທີ່ຮອງຮັບ."
             
             match_list = []
             for m in matches:
-                # ດຶງເວລາ UTC ແລະ ບວກຕື່ມ 7 ຊົ່ວໂມງໃຫ້ເປັນເວລາລາວ
                 utc_dt = datetime.strptime(m['utcDate'], "%Y-%m-%dT%H:%M:%SZ")
-                lao_dt = utc_dt + timedelta(hours=7)
-                lao_time = lao_dt.strftime("%H:%M") 
+                lao_time = (utc_dt + timedelta(hours=7)).strftime("%H:%M")
                 
                 match_list.append({
-                    "ເວລາແຂ່ງ": lao_time,
-                    "ລາຍການ / ລີກ": m['competition']['name'],
-                    "ທີມເຈົ້າບ້ານ": f"🏠 {m['homeTeam']['name']}",
-                    "VS": "ພົບກັບ",
-                    "ທີມຢ້ຽມຢາມ": f"🚀 {m['awayTeam']['name']}",
+                    "ເວລາ": lao_time,
+                    "ລີກ": m['competition']['name'],
+                    "ຄູ່ແຂ່ງ": f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}",
                     "ສະຖານະ": m['status']
                 })
-            
-            # ແປງເປັນ DataFrame ແລະ ລຽງເວລາຈາກເຊົ້າໄປຫາເດິກ
-            df = pd.DataFrame(match_list)
-            return df.sort_values(by='ເວລາແຂ່ງ')
-            
+            return pd.DataFrame(match_list)
         elif response.status_code == 429:
-            return "Error: ທ່ານກົດອັບເດດໄວເກີນໄປ (ກະລຸນາລໍຖ້າ 1 ນາທີ ແລ້ວລອງໃໝ່)."
+            return "ກະລຸນາລໍຖ້າ 1 ນາທີ (API ໃຫ້ດຶງຂໍ້ມູນຈຳກັດ)"
         else:
-            return f"ບໍ່ສາມາດເຊື່ອມຕໍ່ Server ໄດ້ (Code: {response.status_code})"
+            return f"ເຊີເວີຕອບກັບດ້ວຍ Code: {response.status_code}"
             
     except Exception as e:
-        return f"ເກີດຂໍ້ຜິດພາດທາງເຕັກນິກ: {str(e)}"
+        return f"ເກີດຂໍ້ຜິດພາດ: {str(e)}"
 
-# ສ້າງປຸ່ມກົດອັບເດດ
-col1, col2, col3 = st.columns([1, 1, 1])
-with col2:
-    update_btn = st.button('🔄 ອັບເດດຕາຕະລາງໃໝ່', use_container_width=True)
-
-if update_btn:
-    with st.spinner('ກຳລັງດຶງຂໍ້ມູນ...'):
+if st.button('🔄 ອັບເດດຂໍ້ມູນ'):
+    with st.spinner('ກຳລັງໂຫຼດ...'):
         result = get_matches()
-        
         if isinstance(result, pd.DataFrame):
-            st.success(f"ພົບການແຂ່ງຂັນທັງໝົດ {len(result)} ຄູ່ ສຳລັບມື້ນີ້")
-            # ສະແດງຜົນເປັນຕາຕະລາງແບບ Static (ເບິ່ງງ່າຍໃນມືຖື)
-            st.table(result)
+            st.success("ດຶງຂໍ້ມູນສຳເລັດ!")
+            st.dataframe(result, use_container_width=True)
         else:
             st.error(result)
-else:
-    st.info("💡 ກະລຸນາກົດປຸ່ມ 'ອັບເດດ' ດ້ານເທິງເພື່ອເບິ່ງຕາຕະລາງຂອງມື້ນີ້.")
 
-# ສ່ວນທ້າຍເວັບ
-st.markdown("---")
-st.markdown(
-    "<div style='text-align: center; color: gray; font-size: 0.8em;'>"
-    "<p>ພັດທະນາດ້ວຍ Streamlit Python | ຂໍ້ມູນຈາກ football-data.org</p>"
-    "<p>ໝາຍເຫດ: ເວລາທີ່ສະແດງແມ່ນເວລາລາວ GMT+7</p>"
-    "</div>", 
-    unsafe_allow_html=True
-)
+st.caption("ຂໍ້ມູນຈາກ football-data.org | ເວລາລາວ GMT+7")
 
