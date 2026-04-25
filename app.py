@@ -1,90 +1,82 @@
 import streamlit as st
 import pandas as pd
-import cloudscraper
-from bs4 import BeautifulSoup
+import requests
 from datetime import datetime
 
-st.set_page_config(page_title="Goal7 Odds Crawler", page_icon="⚽", layout="wide")
-st.title("⚽ ດຶງຕາຕະລາງບານ ແລະ ລາຄາ (AH, OU, 1x2)")
+st.set_page_config(page_title="Goal7 Odds Data", page_icon="⚽", layout="wide")
+st.title("⚽ ດຶງຂໍ້ມູນລາຄາບານ Goal7 (AH, OU, 1x2)")
 
-def scrape_goal7_detailed():
-    url = "https://goal7.co"
+def get_goal7_api_data():
+    # ໃຊ້ API Link ໂດຍກົງທີ່ Goal7 ໃຊ້ດຶງຂໍ້ມູນມາສະແດງໃນເວັບ
+    api_url = "https://goal7.co" 
     
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://goal7.co",
+        "Accept": "application/json"
+    }
+
     try:
-        scraper = cloudscraper.create_scraper()
-        response = scraper.get(url, timeout=30)
-        response.encoding = 'utf-8'
-        
-        if response.status_code != 200:
-            return f"Error {response.status_code}: ຖືກບລັອກການເຂົ້າເຖິງ"
+        response = requests.get(api_url, headers=headers, timeout=20)
+        if response.status_code == 200:
+            json_data = response.json()
+            # ປົກກະຕິຂໍ້ມູນຈະຢູ່ໃນ json_data['data'] ຫຼື json_data['fixtures']
+            # ຂ້ອຍຈະໃຊ້ວິທີກວດສອບໂຄງສ້າງ JSON ທີ່ພົບທົ່ວໄປໃນເວັບປະເພດນີ້
+            items = json_data.get('data', json_data)
+            
+            if not items:
+                return "ບໍ່ພົບຂໍ້ມູນການແຂ່ງຂັນໃນ API."
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        # ຊອກຫາຕາຕະລາງການແຂ່ງຂັນ
-        table = soup.find('table') 
-        if not table:
-            return "ບໍ່ພົບຕາຕະລາງຂໍ້ມູນໃນໜ້າເວັບ"
-
-        rows = table.find_all('tr')
-        all_matches = []
-        current_league = "ທົ່ວໄປ"
-
-        for row in rows:
-            # ກວດສອບວ່າແມ່ນແຖວຂອງ "ລີກ" ຫຼື ບໍ່
-            league_row = row.find('td', class_='league_name') or row.find('th')
-            if league_row:
-                current_league = league_row.get_text(strip=True)
-                continue
-
-            cols = row.find_all('td')
-            if len(cols) >= 5:
-                # ດຶງຂໍ້ມູນແຕ່ລະຊ່ອງ
-                time = cols[0].get_text(strip=True)
-                home_team = cols[2].get_text(strip=True)
+            match_list = []
+            for item in items:
+                # ດຶງຂໍ້ມູນພື້ນຖານ
+                time = item.get('time', '--:--')
+                league = item.get('league_name', 'ບໍ່ລະບຸລີກ')
+                home = item.get('home_name', 'Unknown')
+                away = item.get('away_name', 'Unknown')
                 
-                # --- ເຈາະດຶງລາຄາ AH ແລະ OU (ປົກກະຕິຢູ່ຖັນທີ 4) ---
-                odds_col = cols[3]
-                # Goal7 ມັກແຍກ AH ແລະ OU ດ້ວຍ <br> ຫຼື <span>
-                odds_text = odds_col.get_text(" | ", strip=True) 
-                
-                away_team = cols[4].get_text(strip=True)
-                
-                # --- ເຈາະດຶງລາຄາ 1x2 (ປົກກະຕິຢູ່ຖັນທ້າຍໆ) ---
-                odds_1x2 = ""
-                if len(cols) >= 10:
-                    odds_1x2 = cols[-1].get_text(strip=True)
+                # ດຶງລາຄາ (Odds) - AH, OU, 1x2
+                # ໝາຍເຫດ: ຊື່ Key ໃນ JSON ອາດຈະເປັນ hdp (Handicap), ou (OverUnder)
+                ah = item.get('hdp', item.get('handicap', '0'))
+                ou = item.get('ou', item.get('over_under', '0'))
+                odd_1 = item.get('odd_1', '-') # ລາຄາເຈົ້າບ້ານຊະນະ
+                odd_x = item.get('odd_x', '-') # ລາຄາສະເໝີ
+                odd_2 = item.get('odd_2', '-') # ລາຄາທີມຢ້ຽມຊະນະ
 
-                all_matches.append({
+                match_list.append({
                     "ເວລາ": time,
-                    "ລີກ": current_league,
-                    "ທີມເຈົ້າບ້ານ": home_team,
-                    "ລາຄາ AH / OU": odds_text,
-                    "ທີມຢ້ຽມຢາມ": away_team,
-                    "ລາຄາ 1x2": odds_1x2
+                    "ລີກ": league,
+                    "ຄູ່ແຂ່ງ": f"{home} vs {away}",
+                    "ລາຄາ AH": ah,
+                    "ລາຄາ OU": ou,
+                    "1x2 (H/D/A)": f"{odd_1} / {odd_x} / {odd_2}"
                 })
-
-        return pd.DataFrame(all_matches)
-
+            
+            return pd.DataFrame(match_list)
+        else:
+            return f"Error {response.status_code}: ເຊີເວີ API ບໍ່ຕອບສະໜອງ"
     except Exception as e:
         return f"ເກີດຂໍ້ຜິດພາດ: {str(e)}"
 
-# ສ່ວນສະແດງຜົນ
-if st.button('🚀 ເລີ່ມດຶງຂໍ້ມູນພ້ອມລາຄາ'):
-    with st.spinner('ກຳລັງດຶງຂໍ້ມູນລາຄາ AH, OU, 1x2...'):
-        df = scrape_goal7_detailed()
+if st.button('🚀 ເລີ່ມດຶງຂໍ້ມູນລາຄາທັງໝົດ'):
+    with st.spinner('ກຳລັງເຊື່ອມຕໍ່ API ຂອງ Goal7...'):
+        df = get_goal7_api_data()
         
         if isinstance(df, pd.DataFrame):
-            if not df.empty:
-                st.success(f"ດຶງຂໍ້ມູນສຳເລັດ! ພົບ {len(df)} ຄູ່")
-                st.dataframe(df, use_container_width=True)
-                
-                # ປຸ່ມ Download
-                csv = df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("📥 ດາວໂຫລດໄຟລ໌ CSV ເພື່ອວິເຄາະ", csv, "goal7_odds_full.csv", "text/csv")
-            else:
-                st.warning("ດຶງຂໍ້ມູນໄດ້ແຕ່ບໍ່ພົບລາຍການແຂ່ງຂັນ.")
+            st.success(f"ດຶງຂໍ້ມູນສຳເລັດ! ພົບທັງໝົດ {len(df)} ຄູ່")
+            st.dataframe(df, use_container_width=True)
+            
+            # ສ້າງປຸ່ມ Download CSV
+            csv = df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 ດາວໂຫລດໄຟລ໌ CSV ສຳລັບວິເຄາະ",
+                data=csv,
+                file_name=f'goal7_api_odds_{datetime.now().strftime("%Y%m%d")}.csv',
+                mime='text/csv',
+            )
         else:
             st.error(df)
 
 st.divider()
-st.caption("ຂໍ້ມູນຈາກ Goal7 | ໃຊ້ BeautifulSoup ເພື່ອເຈາະດຶງລາຄາໂດຍກົງ")
+st.info("💡 ວິທີນີ້ຈະດຶງຂໍ້ມູນຈາກ API ໂດຍກົງ ເຊິ່ງຈະໄດ້ລາຄາທີ່ຊັດເຈນກວ່າການ Scraping ຈາກໜ້າ HTML.")
 
