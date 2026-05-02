@@ -1,41 +1,32 @@
 import streamlit as st
 import requests
-import re
+from bs4 import BeautifulSoup
 
-st.title("⚽ Goal7 XHR MODE (PRO)")
+st.title("⚽ Goal7 REAL DATA MODE")
 
 url = st.text_input(
-    "ໃສ່ລິ້ງ",
-    "https://goal7.co/priceball/?i=2799687"
+    "Analyse URL",
+    "https://goal7.co/analyse/?id=2799687"
 )
 
-def extract_id(url):
-    match = re.search(r"i=(\d+)", url)
-    return match.group(1) if match else None
+if st.button("ດຶງຂໍ້ມູນຈິງ"):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=15)
 
+        soup = BeautifulSoup(r.text, "html.parser")
 
-if st.button("ດຶງລາຄາຈິງ (XHR)"):
-    match_id = extract_id(url)
+        text = soup.get_text("\n")
 
-    if not match_id:
-        st.error("ບໍ່ເຫັນ ID")
-    else:
-        try:
-            # 🔥 API (goal7 ใช้)
-            api_url = f"https://goal7.co/ajax/priceball?id={match_id}"
+        # filter เฉพาะ odds
+        lines = []
+        for line in text.split("\n"):
+            if any(x in line for x in ["AH", "Over", "Under", "1X2", "สูง", "ต่ำ"]):
+                lines.append(line.strip())
 
-            headers = {
-                "User-Agent": "Mozilla/5.0",
-                "Referer": url
-            }
+        st.success("ດຶງໄດ້ແລ້ວ")
 
-            r = requests.get(api_url, headers=headers, timeout=15)
+        st.text_area("DATA", "\n".join(lines[:200]), height=400)
 
-            st.success("ໂຫຼດ API ສຳເລັດ")
-
-            data = r.text
-
-            st.text_area("RAW DATA", data[:5000], height=400)
-
-        except Exception as e:
-            st.error(e)
+    except Exception as e:
+        st.error(e)
