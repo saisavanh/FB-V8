@@ -3,6 +3,9 @@ pandas
 requests
 beautifulsoup4
 playwright
-pip install selenium beautifulsoup4 pandas lxml
+pip 
+install
+selenium
+lxml
 
 
