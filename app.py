@@ -1,355 +1,288 @@
-import streamlit as st
-import streamlit.components.v1 as components
-
-st.set_page_config(
-    page_title="7M Live Score",
-    layout="wide"
-)
-
-st.title("⚽ 7M Live Score")
-
-html_code = """
-<iframe
-src="https://freelive.7mth.com/live.aspx?mark=th&TimeZone=%2B0700&wordAd=&wadurl=//&width=680&cpageBgColor=FFFFFF&tableFontSize=11&cborderColor=DDDDDD&ctdColor1=FFFFFF&ctdColor2=E0E9F6&clinkColor=0044DD&cdateFontColor=333333&cdateBgColor=FFFFFF&scoreFontSize=12&cteamFontColor=000000&cgoalFontColor=FF0000&cgoalBgColor=FFFFE1&cremarkFontColor=0000FF&cremarkBgColor=F7F8F3&Skins=10&teamWeight=400&scoreWeight=700&goalWeight=400&fontWeight=700&DSTbox="
-height="900"
-width="100%"
-scrolling="yes"
-frameborder="0">
-</iframe>
-"""
-
-components.html(html_code, height=900)
-import streamlit as st
+import re
+import time
 import pandas as pd
-import json
-from typing import Dict, List, Optional
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
 
-# ============================================================
-# 1. ຕັ້ງຄ່າສູດ V13.8 (ຊ່ວງສະເພາະລີກ ແລະ DR)
-# ============================================================
-LEAGUE_CONFIGS = {
-    "FIN D1": {"range": (120, 200, "under", "over"), "dr": 0.85, "desc": "120-200=ຕໍ່, >200=ຮອງ, <120=ຮອງ"},
-    "NOR D1": {"range": (80, 120, "standard", "over"), "dr": 0.90, "desc": ">120=ຮອງ, 80-120=ຕໍ່, <80=ຮອງ"},
-    "SWE D1": {"range": (80, 120, "standard", "over"), "dr": 0.90, "desc": ">120=ຮອງ, 80-120=ຕໍ່, <80=ຮອງ"},
-    "LIB Cup": {"range": (70, 100, "standard", "over"), "dr": 0.80, "desc": ">100=ຮອງ, 70-100=ຕໍ່, <70=ຮອງ"},
-    "HON D1": {"range": (55, 80, "standard", "over"), "dr": 0.90, "desc": ">80=ຮອງ, 55-80=ຕໍ່, <55=ຮອງ"},
-    "ARM D1": {"range": (120, 180, "standard", "over"), "dr": 0.90, "desc": ">180=ຮອງ, 120-180=ຕໍ່, <120=ຮອງ"},
-    "ITA D2": {"range": (100, 160, "standard", "over"), "dr": 0.95, "desc": ">160=ຮອງ, 100-160=ຕໍ່, <100=ຮອງ"},
-    "ENG PR": {"range": (85, 115, "standard", "over"), "dr": 0.90, "desc": ">115=ຮອງ, 85-115=ຕໍ່, <85=ຮອງ"},
-    "BEL D1": {"range": (55, 80, "standard", "over"), "dr": 0.90, "desc": ">80=ຮອງ, 55-80=ຕໍ່, <55=ຮອງ"},
-}
-DEFAULT_RANGES = [
-    (150, float('inf'), "over"),    # >150 = ຮອງ
-    (120, 150, "under"),            # 120-150 = ຕໍ່
-    (100, 120, "under"),            # 100-119 = ຕໍ່
-    (80, 100, "under"),             # 80-99 = ຕໍ່
-    (55, 80, "under"),              # 55-79 = ຕໍ່
-    (45, 55, "avoid"),              # 45-54 = ຫຼີກລ່ຽງ
-    (0, 45, "over"),                # <45 = ຮອງ
-]
-DEFAULT_DR = 1.0
-
-# ============================================================
-# 2. ຟັງຊັນຄຳນວນຕົວຄູນ
-# ============================================================
-def calculate_SI(home_rank: int, away_rank: int, is_home_favorite: bool) -> float:
-    """SI = 0.90 + (rank_diff * 0.02) ຈຳກັດ 0.90-1.10"""
-    rank_diff = abs(home_rank - away_rank) if (home_rank and away_rank) else 0
-    si = 0.90 + (rank_diff * 0.02)
-    return max(0.90, min(1.10, si))
-
-def calculate_WM(form_5: str) -> float:
-    """WM = 1.00 + (undefeated_rate - 0.50) * 0.40 ຈຳກັດ 0.80-1.20"""
-    if not form_5 or len(form_5) < 5:
-        return 1.00
-    undefeated = sum(1 for r in form_5[:5] if r in ['W', 'D'])
-    rate = undefeated / 5.0
-    wm = 1.00 + (rate - 0.50) * 0.40
-    return max(0.80, min(1.20, wm))
-
-def calculate_PP(home_gf: int, home_ga: int, away_gf: int, away_ga: int, is_home_favorite: bool) -> float:
-    """PP = 1.00 + (ratio_fav - ratio_und) * 0.20 ຈຳກັດ 0.90-1.10"""
-    if is_home_favorite:
-        ratio_fav = home_gf / max(1, home_ga)
-        ratio_und = away_gf / max(1, away_ga)
+# ------------------------------------------------------------
+# ຟັງຊັນຄຳນວນ FCS ຕາມສູດ V13.8 (ດັດແປງຈາກຄັ້ງກ່ອນ)
+# ------------------------------------------------------------
+def calculate_fcs(match_data):
+    # match_data ຕ້ອງມີ keys ຕາມນີ້
+    si = max(0.90, min(1.10, 0.90 + (abs(match_data['home_rank'] - match_data['away_rank']) * 0.02)))
+    
+    if match_data['is_home_favorite']:
+        undefeated = sum(1 for r in match_data['home_form_5'][:5] if r in 'WD')
     else:
-        ratio_fav = away_gf / max(1, away_ga)
-        ratio_und = home_gf / max(1, home_ga)
-    diff = ratio_fav - ratio_und
-    pp = 1.00 + diff * 0.20
-    return max(0.90, min(1.10, pp))
+        undefeated = sum(1 for r in match_data['away_form_5'][:5] if r in 'WD')
+    wm = max(0.80, min(1.20, 1.00 + ((undefeated/5.0 - 0.50) * 0.40)))
+    
+    fav_gf = match_data['home_gf'] if match_data['is_home_favorite'] else match_data['away_gf']
+    fav_ga = match_data['home_ga'] if match_data['is_home_favorite'] else match_data['away_ga']
+    und_gf = match_data['away_gf'] if match_data['is_home_favorite'] else match_data['home_gf']
+    und_ga = match_data['away_ga'] if match_data['is_home_favorite'] else match_data['home_ga']
+    fav_ratio = fav_gf / max(1.0, fav_ga)
+    und_ratio = und_gf / max(1.0, und_ga)
+    pp = max(0.90, min(1.10, 1.00 + ((fav_ratio - und_ratio) * 0.20)))
+    
+    if match_data.get('h2h_matches') and len(match_data['h2h_matches']) > 0:
+        undefeated_h2h = 0
+        for m in match_data['h2h_matches']:
+            if match_data['is_home_favorite']:
+                if m['home_score'] >= m['away_score']:
+                    undefeated_h2h += 1
+            else:
+                if m['away_score'] >= m['home_score']:
+                    undefeated_h2h += 1
+        h2h_rate = undefeated_h2h / len(match_data['h2h_matches'])
+        h2h = max(0.80, min(1.20, 0.80 + (h2h_rate * 0.40)))
+    else:
+        h2h = 1.00
+    
+    am = max(0.85, min(1.15, (si + wm + pp + h2h) / 4.0))
+    
+    # DR ຕາມລີກ (ສາມາດເພີ່ມໄດ້)
+    dr_league_map = {
+        'FIN D1': 0.85, 'NOR D1': 0.90, 'SWE D1': 0.90,
+        'LIB Cup': 0.80, 'HON D1': 0.90, 'ARM D1': 0.90,
+        'ITA D2': 0.95, 'ENG PR': 0.90, 'BEL D1': 0.90,
+    }
+    base_dr = dr_league_map.get(match_data.get('league', ''), 1.00)
+    error_count = match_data.get('error_count', 0)
+    dr = max(0.50, min(1.00, base_dr - (error_count * 0.05)))
+    
+    fcs_raw = si * wm * pp * h2h * am * dr
+    fcs = fcs_raw * 100.0
+    
+    # OA
+    oa = (match_data.get('favorite_initial_odds', 1.85) - 1.85) / 0.10
+    if oa > 1.5:
+        fcs *= 1.05
+    elif oa < -1.5:
+        fcs *= 0.95
+    
+    return fcs
 
-def calculate_H2H(h2h_matches: List[Dict], is_home_favorite: bool) -> float:
-    """H2H = 0.80 + (undefeated_rate * 0.40) ຈຳກັດ 0.80-1.20"""
-    if not h2h_matches:
-        return 1.00
-    total = len(h2h_matches)
-    undefeated = 0
-    for match in h2h_matches:
-        if is_home_favorite:
-            if match.get('home_score', 0) >= match.get('away_score', 0):
-                undefeated += 1
+def get_decision(fcs, league):
+    ranges = {
+        'FIN D1': (200, 120), 'NOR D1': (120, 80), 'SWE D1': (120, 80),
+        'LIB Cup': (100, 70), 'HON D1': (80, 55), 'ARM D1': (180, 120),
+        'ITA D2': (160, 100), 'ENG PR': (115, 85), 'BEL D1': (80, 55),
+    }
+    if league in ranges:
+        high, low = ranges[league]
+        if fcs > high:
+            return 'ຮອງ'
+        elif fcs >= low:
+            return 'ຕໍ່'
         else:
-            if match.get('away_score', 0) >= match.get('home_score', 0):
-                undefeated += 1
-    rate = undefeated / total if total > 0 else 0.5
-    h2h = 0.80 + rate * 0.40
-    return max(0.80, min(1.20, h2h))
-
-def calculate_AM(si: float, wm: float, pp: float, h2h: float) -> float:
-    """AM = (SI+WM+PP+H2H)/4 ຈຳກັດ 0.85-1.15"""
-    am = (si + wm + pp + h2h) / 4.0
-    return max(0.85, min(1.15, am))
-
-# ============================================================
-# 3. ຄຳນວນ FCS ສຳລັບນັດດຽວ
-# ============================================================
-def analyze_match(row: pd.Series, override_favorite: Optional[str] = None) -> Dict:
-    """
-    ຮັບແຖວຂອງ DataFrame ທີ່ມີໂຄລຳຕໍ່ໄປນີ້ (ສາມາດປັບຊື່ໄດ້):
-        league, home_team, away_team,
-        home_rank, away_rank,
-        home_form_5, away_form_5,
-        home_gf, home_ga, away_gf, away_ga,
-        h2h_matches (JSON string ຫຼື list),
-        initial_handicap, home_win_odds, draw_odds, away_win_odds
-    override_favorite: "home" ຫຼື "away" ເພື່ອບັງຄັບທີມຕໍ່.
-    """
-    # ກຳນົດທີມຕໍ່ຕາມ Handicap ຫຼື Override
-    is_home_favorite = True
-    if override_favorite == "away":
-        is_home_favorite = False
-    elif override_favorite == "home":
-        is_home_favorite = True
+            return 'ຮອງ'
     else:
-        handicap = row.get("initial_handicap", "")
-        if handicap and str(handicap).startswith("-"):
+        if fcs > 150:
+            return 'ຮອງ'
+        elif fcs >= 55:
+            return 'ຕໍ່'
+        elif 45 <= fcs < 55:
+            return '⚠️ ຫຼີກລ່ຽງ'
+        else:
+            return 'ຮອງ'
+
+# ------------------------------------------------------------
+# ຟັງຊັນດຶງຂໍ້ມູນຈາກ 7mth live ໂດຍໃຊ້ Selenium
+# ------------------------------------------------------------
+def scrape_7mth_live(url, headless=True, timeout=20):
+    """
+    ເປີດ URL ຂອງ 7mth (ຕົວຢ່າງ: https://freelive.7mth.com/live.aspx?mark=th&TimeZone=%2B0700)
+    ດຶງຕາຕະລາງຫຼັງຈາກ JavaScript ໂຫຼດສຳເລັດ
+    ຄືນ DataFrame ຂອງຂໍ້ມູນດິບ (ອາດມີຫຼາຍຕາຕະລາງ, ເລືອກເອົາຕາຕະລາງຫຼັກ)
+    """
+    options = Options()
+    if headless:
+        options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_experimental_option('excludeSwitches', ['enable-automation'])
+    
+    driver = webdriver.Chrome(options=options)
+    driver.get(url)
+    
+    # ລໍຖ້າໃຫ້ຕາຕະລາງທີ່ມີຂໍ້ມູນປາກົດ (ປັບ selector ຕາມຄວາມເໝາະສົມ)
+    try:
+        # ລອງຫາຕາຕະລາງທີ່ມີ id ຫຼື class ທີ່ກ່ຽວຂ້ອງ
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "table.live-table, table#live_Table, table[class*='live']"))
+        )
+    except Exception as e:
+        print(f"⚠️ ລໍຖ້າຕາຕະລາງບໍ່ສຳເລັດ: {e}")
+    
+    # ລໍຖ້າເພີ່ມອີກ 2 ວິນາທີເພື່ອໃຫ້ JavaScript ອັບເດດສຳເລັດ
+    time.sleep(2)
+    
+    html = driver.page_source
+    driver.quit()
+    
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # ຄົ້ນຫາຕາຕະລາງທີ່ມີຂໍ້ມູນນັດ (ອາດມີຫຼາຍຕາຕະລາງ)
+    # ຈາກ source code 7mth, ຕາຕະລາງຫຼັກມັກມີ id="live_Table"
+    table = soup.find('table', id='live_Table')
+    if not table:
+        table = soup.find('table', class_='live-table')
+    if not table:
+        tables = soup.find_all('table')
+        # ເລືອກເອົາຕາຕະລາງທີ່ມີຈຳນວນແຖວຫຼາຍທີ່ສຸດ
+        if tables:
+            table = max(tables, key=lambda t: len(t.find_all('tr')))
+        else:
+            raise Exception("ບໍ່ພົບຕາຕະລາງໃນໜ້າເວັບ")
+    
+    # ອ່ານຕາຕະລາງດ້ວຍ pandas
+    df = pd.read_html(str(table))[0]
+    return df, soup
+
+# ------------------------------------------------------------
+# ຟັງຊັນແປງ DataFrame ຈາກ 7mth ໃຫ້ເປັນຮູບແບບທີ່ calculate_fcs ຕ້ອງການ
+# ------------------------------------------------------------
+def parse_7mth_row_to_match(row_dict, league_name, is_home_favorite_from_handicap=True):
+    """
+    row_dict: dict ຂອງຂໍ້ມູນແຖວນັດ (ຈາກ DataFrame)
+    ຟັງຊັນນີ້ຕ້ອງປັບໃຫ້ກົງກັບໂຄງສ້າງຂອງຕາຕະລາງຈິງ
+    """
+    # ຕົວຢ່າງການແປງ (ທ່ານຕ້ອງປັບຕາມຊື່ຄໍລຳທີ່ປາກົດຈິງ)
+    # ສົມມຸດວ່າມີຄໍລຳ: ['Time', 'Home', 'Score', 'Away', 'H', 'A', 'Hdp', 'O1', 'O2']
+    home_team = row_dict.get('Home', '')
+    away_team = row_dict.get('Away', '')
+    score = row_dict.get('Score', '0-0')
+    handicap = row_dict.get('Hdp', '0')
+    
+    # ກຳນົດທີມຕໍ່ຈາກ Handicap (ເຄື່ອງໝາຍ - ໝາຍເຖິງທີມເຈົ້າບ້ານຕໍ່)
+    if is_home_favorite_from_handicap:
+        if isinstance(handicap, str) and '-' in handicap:
             is_home_favorite = True
         else:
             is_home_favorite = False
+    else:
+        # ຖ້າມີຄໍລຳແຍກບອກທີມຕໍ່ (ເຊັ່ນ 'Fav')
+        is_home_favorite = row_dict.get('Fav', 'H') == 'H'
+    
+    # ອັນດັບ (ຕ້ອງດຶງຈາກແຫຼ່ງອື່ນ ຫຼື ຄາດຄະເນ)
+    home_rank = extract_rank_from_text(row_dict.get('HomeRank', '10'))
+    away_rank = extract_rank_from_text(row_dict.get('AwayRank', '10'))
+    
+    # ຟອມ 5 ນັດຫຼ້າສຸດ (ຕ້ອງດຶງຈາກຄໍລຳສະເພາະ ຫຼື ຄິດໄລ່ຈາກປະຫວັດ)
+    home_form = parse_form_string(row_dict.get('HomeForm', 'DDDDD'))
+    away_form = parse_form_string(row_dict.get('AwayForm', 'DDDDD'))
+    
+    # ປະຕູເສລີ່ຍ (ຕ້ອງດຶງຈາກສະຖິຕິລີກ)
+    home_gf = extract_goals_avg(row_dict.get('HomeGF', '1.0'))
+    home_ga = extract_goals_avg(row_dict.get('HomeGA', '1.0'))
+    away_gf = extract_goals_avg(row_dict.get('AwayGF', '1.0'))
+    away_ga = extract_goals_avg(row_dict.get('AwayGA', '1.0'))
+    
+    # odds ເລີ່ມຕົ້ນຂອງທີມຕໍ່
+    fav_odds = extract_odds(row_dict.get('FavOdds', '1.85'))
+    
+    # H2H (ຖ້າມີຂໍ້ມູນ, ຕ້ອງດຶງຈາກແຫຼ່ງອື່ນ)
+    h2h_matches = []
+    
+    match = {
+        'league': league_name,
+        'home_team': home_team,
+        'away_team': away_team,
+        'home_rank': home_rank,
+        'away_rank': away_rank,
+        'home_form_5': home_form,
+        'away_form_5': away_form,
+        'home_gf': home_gf,
+        'home_ga': home_ga,
+        'away_gf': away_gf,
+        'away_ga': away_ga,
+        'h2h_matches': h2h_matches,
+        'is_home_favorite': is_home_favorite,
+        'favorite_initial_odds': fav_odds,
+        'error_count': 0
+    }
+    return match
 
-    favorite_team = row["home_team"] if is_home_favorite else row["away_team"]
-    underdog_team = row["away_team"] if is_home_favorite else row["home_team"]
+def extract_rank_from_text(rank_str):
+    try:
+        return int(re.search(r'\d+', str(rank_str)).group())
+    except:
+        return 10
 
-    # ຄຳນວນຕົວຄູນ
-    si = calculate_SI(row.get("home_rank", 0), row.get("away_rank", 0), is_home_favorite)
-    wm = calculate_WM(row["home_form_5"] if is_home_favorite else row["away_form_5"])
-    pp = calculate_PP(
-        row.get("home_gf", 0), row.get("home_ga", 0),
-        row.get("away_gf", 0), row.get("away_ga", 0),
-        is_home_favorite
-    )
-    # ແປງ H2H ຈາກ JSON string ຫຼື list
-    h2h_matches = row.get("h2h_matches", [])
-    if isinstance(h2h_matches, str) and h2h_matches:
+def parse_form_string(form_str):
+    form_str = str(form_str).upper()
+    return [ch for ch in form_str if ch in 'WDL']
+
+def extract_goals_avg(goals_str):
+    try:
+        return float(re.search(r'[\d\.]+', str(goals_str)).group())
+    except:
+        return 1.0
+
+def extract_odds(odds_str):
+    try:
+        return float(re.search(r'[\d\.]+', str(odds_str)).group())
+    except:
+        return 1.85
+
+# ------------------------------------------------------------
+# ຟັງຊັນຫຼັກ: ດຶງຂໍ້ມູນຈາກ 7mth ແລະ ວິເຄາະ
+# ------------------------------------------------------------
+def auto_analyze_from_7mth(url, league_name='Unknown', headless=True):
+    print("📥 ກຳລັງເປີດໜ້າເວັບ ແລະ ດຶງຂໍ້ມູນ...")
+    df_raw, soup = scrape_7mth_live(url, headless=headless)
+    print(f"✅ ດຶງຂໍ້ມູນສຳເລັດ: {len(df_raw)} ແຖວ")
+    
+    # ສະແດງຕົວຢ່າງຂໍ້ມູນເພື່ອໃຫ້ຜູ້ໃຊ້ປັບການແປງ
+    print("\n📋 ຕົວຢ່າງ 5 ແຖວທຳອິດຂອງຂໍ້ມູນດິບ:")
+    print(df_raw.head())
+    print("\n📋 ຊື່ຄໍລຳທີ່ພົບ:")
+    print(df_raw.columns.tolist())
+    
+    # ແປງແຕ່ລະແຖວເປັນ match dict (ຕ້ອງປັບຕາມໂຄງສ້າງຈິງ)
+    matches = []
+    for idx, row in df_raw.iterrows():
         try:
-            h2h_matches = json.loads(h2h_matches)
-        except:
-            h2h_matches = []
-    h2h = calculate_H2H(h2h_matches, is_home_favorite)
-    am = calculate_AM(si, wm, pp, h2h)
-
-    league = row.get("league", "")
-    dr = LEAGUE_CONFIGS.get(league, {}).get("dr", DEFAULT_DR)
-    fcs_raw = si * wm * pp * h2h * am * dr
-    fcs = fcs_raw * 100
-
-    # OA ຖ້າມີລາຄານ້ຳ
-    home_odds = row.get("home_win_odds")
-    away_odds = row.get("away_win_odds")
-    if home_odds and away_odds:
-        favorite_odds = home_odds if is_home_favorite else away_odds
-        if favorite_odds:
-            oa = (favorite_odds - 1.85) / 0.10
-            if oa > 1.5:
-                fcs *= 1.05
-            elif oa < -1.5:
-                fcs *= 0.95
-
-    # ຕັດສິນໃຈຕາມຊ່ວງ
-    decision = "ສະໜັບສະໜູນທີມຕໍ່"
-    confidence = "ປານກາງ (60-65%)"
-    avoid = False
-
-    if league in LEAGUE_CONFIGS:
-        cfg = LEAGUE_CONFIGS[league]
-        if cfg["range"][2] == "standard":
-            ranges = DEFAULT_RANGES
-        else:
-            low, high = cfg["range"][0], cfg["range"][1]
-            if cfg["range"][3] == "over":
-                if fcs > high:
-                    decision = "ສະໜັບສະໜູນທີມຮອງ"
-                    confidence = "ສູງ (85-90%)"
-                elif fcs >= low:
-                    decision = "ສະໜັບສະໜູນທີມຕໍ່"
-                    confidence = "ສູງ (85-90%)"
-                else:
-                    decision = "ສະໜັບສະໜູນທີມຮອງ"
-                    confidence = "ສູງປານກາງ (70-75%)"
-            else:
-                if fcs > high:
-                    decision = "ສະໜັບສະໜູນທີມຕໍ່"
-                elif fcs >= low:
-                    decision = "ສະໜັບສະໜູນທີມຕໍ່"
-                else:
-                    decision = "ສະໜັບສະໜູນທີມຮອງ"
-            ranges = None
-    else:
-        ranges = DEFAULT_RANGES
-
-    if ranges:
-        for low, high, action in ranges:
-            if low <= fcs < high:
-                if action == "over":
-                    decision = "ສະໜັບສະໜູນທີມຮອງ"
-                    confidence = "ສູງ (85-90%)" if fcs > 150 else "ປານກາງ (60-65%)"
-                elif action == "under":
-                    decision = "ສະໜັບສະໜູນທີມຕໍ່"
-                    confidence = "ສູງ (85-90%)" if fcs > 120 else "ປານກາງ (60-65%)"
-                elif action == "avoid":
-                    decision = "⚠️ ບໍ່ແນະນຳ (ຫຼີກລ່ຽງ)"
-                    confidence = "ຕ່ຳ"
-                    avoid = True
-                break
-
-    return {
-        "ທີມຕໍ່": favorite_team,
-        "ທີມຮອງ": underdog_team,
-        "FCS": round(fcs, 1),
-        "ຄຳແນະນຳ": decision,
-        "ຄວາມໝັ້ນໃຈ": confidence,
-        "ຫຼີກລ່ຽງ": avoid,
-        "SI": round(si, 3),
-        "WM": round(wm, 3),
-        "PP": round(pp, 3),
-        "H2H": round(h2h, 3),
-        "AM": round(am, 3),
-        "DR": dr
-    }
-
-# ============================================================
-# 4. ຟັງຊັນວິເຄາະທັງ DataFrame
-# ============================================================
-def analyze_all_matches(df: pd.DataFrame, override_col: Optional[str] = None) -> pd.DataFrame:
-    """
-    ຮັບ DataFrame ທີ່ມີໂຄລຳທີ່ຈຳເປັນ, ຄຳນວນວິເຄາະທຸກແຖວ,
-    override_col: ຊື່ຂອງໂຄລຳທີ່ບອກວ່າ "home" ຫຼື "away" ສຳລັບ override ທີມຕໍ່.
-    """
+            match = parse_7mth_row_to_match(row.to_dict(), league_name)
+            matches.append(match)
+        except Exception as e:
+            print(f"⚠️ ຂ້າມແຖວ {idx} ຍ້ອນຂໍ້ຜິດພາດ: {e}")
+    
+    # ຄຳນວນ FCS ແລະ ຕັດສິນໃຈ
     results = []
-    for idx, row in df.iterrows():
-        override = None
-        if override_col and override_col in row and row[override_col] in ["home", "away"]:
-            override = row[override_col]
-        analysis = analyze_match(row, override_favorite=override)
-        # ຮວມໂຄລຳເດີມ ແລະ ຜົນການວິເຄາະ
-        combined = {**row.to_dict(), **analysis}
-        results.append(combined)
-    return pd.DataFrame(results)
-
-# ============================================================
-# 5. ສ້າງຕົວຢ່າງຂໍ້ມູນ (ທ່ານສາມາດປ່ຽນເປັນຂໍ້ມູນຈິງໄດ້)
-# ============================================================
-def create_sample_data() -> pd.DataFrame:
-    data = {
-        "league": ["ENG PR", "ITA D2", "BEL D1", "FIN D1", "NOR D1", "SWE D1", "LIB Cup"],
-        "home_team": ["Bournemouth", "Monza", "Genk", "Ilves", "Lillestrøm", "GAIS", "Boca Juniors"],
-        "away_team": ["Man City", "Juve Stabia", "Antwerp", "Inter Turku", "Kristiansund", "Hammarby", "Cruzeiro"],
-        "home_rank": [6, 3, 2, 9, 3, 9, 3],
-        "away_rank": [2, 7, 5, 1, 12, 2, 2],
-        "home_form_5": ["WDDWW", "WDWLW", "WDWDD", "WLDWL", "WWLWW", "LDDWL", "WLDWD"],
-        "away_form_5": ["WWLWW", "LDLWD", "WLWWL", "WWWDW", "LLLLW", "WWWLD", "WLWWD"],
-        "home_gf": [56, 61, 39, 10, 16, 10, 5],
-        "home_ga": [52, 32, 29, 13, 7, 9, 3],
-        "away_gf": [75, 44, 33, 11, 7, 21, 3],
-        "away_ga": [32, 45, 35, 5, 12, 6, 2],
-        "h2h_matches": [
-            json.dumps([{"home_score": 1, "away_score": 1}, {"home_score": 0, "away_score": 1}]) for _ in range(7)
-        ],
-        "initial_handicap": ["0.5/1", "-0.5/1", "0/-0.5", "0.5/1", "-1.5", "0.5/1", "-0.5/1"],
-        "home_win_odds": [2.0, 1.8, 1.9, 2.1, 1.85, 2.2, 1.95],
-        "draw_odds": [3.4, 3.5, 3.6, 3.4, 3.7, 3.5, 3.3],
-        "away_win_odds": [1.95, 2.0, 2.0, 1.85, 1.9, 1.8, 2.1],
-    }
-    return pd.DataFrame(data)
-
-# ============================================================
-# 6. Streamlit UI
-# ============================================================
-st.set_page_config(page_title="ລະບົບວິເຄາະບານເຕະອັດຕະໂນມັດ V13.8", layout="wide")
-st.title("⚽ ວິເຄາະຫຼາຍນັດພ້ອມກັນຕາມສູດ V13.8")
-
-st.markdown("""
-### ວິທີໃຊ້ງານ:
-1. **ໃຊ້ຂໍ້ມູນຕົວຢ່າງ**: ກົດປຸ່ມ "ໃຊ້ຂໍ້ມູນຕົວຢ່າງ" ເພື່ອທົດລອງ.
-2. **ອັບໂຫຼດຂໍ້ມູນຂອງທ່ານ**: ອັບໂຫຼດໄຟລ໌ CSV ຫຼື Excel ທີ່ມີໂຄລຳຕາມທີ່ກຳນົດ.
-3. ກົດ "ວິເຄາະທັງໝົດ" ເພື່ອຄຳນວນ FCS ແລະ ຄຳແນະນຳທຸກນັດ.
-4. ສາມາດດາວໂຫຼດຜົນເປັນ CSV ໄດ້.
-""")
-
-# ສ້າງສະຖານະສຳລັບຂໍ້ມູນ
-if 'df' not in st.session_state:
-    st.session_state.df = None
-
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("📂 ໃຊ້ຂໍ້ມູນຕົວຢ່າງ"):
-        st.session_state.df = create_sample_data()
-        st.success("ໂຫຼດຂໍ້ມູນຕົວຢ່າງສຳເລັດ")
-with col2:
-    if st.button("🗑️ ລ້າງຂໍ້ມູນ"):
-        st.session_state.df = None
-        st.info("ລ້າງຂໍ້ມູນແລ້ວ")
-
-# ອັບໂຫຼດໄຟລ໌
-uploaded_file = st.file_uploader("ຫຼື ເລືອກໄຟລ໌ CSV/Excel ຂອງທ່ານ", type=["csv", "xlsx"])
-if uploaded_file:
-    if uploaded_file.name.endswith('.csv'):
-        st.session_state.df = pd.read_csv(uploaded_file)
-    else:
-        st.session_state.df = pd.read_excel(uploaded_file)
-    st.success("ອັບໂຫຼດຂໍ້ມູນສຳເລັດ")
-
-# ຖ້າມີຂໍ້ມູນ, ສະແດງຕົວຢ່າງ ແລະ ປຸ່ມວິເຄາະ
-if st.session_state.df is not None:
-    df = st.session_state.df
-    st.subheader("ຕົວຢ່າງຂໍ້ມູນ (5 ແຖວທຳອິດ)")
-    st.dataframe(df.head(5))
+    for m in matches:
+        fcs = calculate_fcs(m)
+        decision = get_decision(fcs, m['league'])
+        results.append({
+            'ລີກ': m['league'],
+            'ເຈົ້າບ້ານ': m['home_team'],
+            'ທີມຢາມ': m['away_team'],
+            'FCS': round(fcs, 2),
+            'ຄຳແນະນຳ': decision
+        })
     
-    # ໃຫ້ຜູ້ໃຊ້ລະບຸໂຄລຳ override (ຖ້າມີ)
-    override_column = st.selectbox("ເລືອກໂຄລຳທີ່ໃຊ້ສຳລັບ Override ທີມຕໍ່ (ຖ້າບໍ່ມີ, ເລືອກ None)", ["None"] + list(df.columns))
-    override_col = None if override_column == "None" else override_column
-    
-    if st.button("🚀 ວິເຄາະທັງໝົດ"):
-        with st.spinner("ກຳລັງວິເຄາະ..."):
-            try:
-                df_analysis = analyze_all_matches(df, override_col)
-                st.session_state.df_analysis = df_analysis
-                st.success(f"ວິເຄາະສຳເລັດ {len(df_analysis)} ນັດ")
-            except Exception as e:
-                st.error(f"ເກີດຂໍ້ຜິດພາດ: {e}")
-                st.stop()
+    df_result = pd.DataFrame(results)
+    return df_result
 
-if 'df_analysis' in st.session_state:
-    df_analysis = st.session_state.df_analysis
+# ------------------------------------------------------------
+# ຕົວຢ່າງການໃຊ້ງານ
+# ------------------------------------------------------------
+if __name__ == "__main__":
+    # URL ຂອງ 7mth ພາສາທີ່ທ່ານຕ້ອງການ (ປ່ຽນ mark=th ເປັນ vn, en, kr ຕາມຕ້ອງການ)
+    TARGET_URL = "https://freelive.7mth.com/live.aspx?mark=th&TimeZone=%2B0700"
     
-    # ເລືອກໂຄລຳທີ່ສົນໃຈມາສະແດງ
-    display_cols = ["league", "home_team", "away_team", "FCS", "ທີມຕໍ່", "ທີມຮອງ", "ຄຳແນະນຳ", "ຄວາມໝັ້ນໃຈ", "ຫຼີກລ່ຽງ"]
-    display_cols = [c for c in display_cols if c in df_analysis.columns]
+    # ເອີ້ນໃຊ້ງານ
+    result = auto_analyze_from_7mth(TARGET_URL, league_name='7mth Live')
     
-    st.subheader("📊 ຜົນການວິເຄາະລວມ (ທຸກນັດ)")
-    st.dataframe(df_analysis[display_cols])
+    print("\n📊 **ຜົນການວິເຄາະອັດຕະໂນມັດ**")
+    print(result.to_string(index=False))
     
-    # ສະແດງສະຖິຕິລວມ
-    total = len(df_analysis)
-    avoid_matches = df_analysis[df_analysis.get("ຫຼີກລ່ຽງ", False) == True]
-    st.info(f"📌 ຈຳນວນນັດທັງໝົດ: {total} ນັດ | ນັດທີ່ແນະນຳໃຫ້ຫຼີກລ່ຽງ: {len(avoid_matches)} ນັດ")
-    
-    # ດາວໂຫຼດຜົນ
-    csv = df_analysis.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 ດາວໂຫຼດຜົນການວິເຄາະເປັນ CSV", csv, "analysis_result.csv", "text/csv")
-else:
-    st.info("ກະລຸນາອັບໂຫຼດຂໍ້ມູນ ຫຼື ໃຊ້ຂໍ້ມູນຕົວຢ່າງເພື່ອເລີ່ມຕົ້ນ.")
-
-st.markdown("---")
-st.caption("ສູດ V13.8 ພັດທະນາຈາກການຮຽນຮູ້ຂໍ້ມູນ 21 ນັດ ທີ່ມີຜົນຈິງ (ຄວາມຖືກຕ້ອງ 100%). ສາມາດນຳໄປໃຊ້ໄດ້ຟຣີ.")
+    # ບັນທຶກ CSV
+    result.to_csv("7mth_analysis_result.csv", index=False, encoding='utf-8-sig')
+    print("\n💾 ບັນທຶກຜົນໄວ້ທີ່ 7mth_analysis_result.csv")
