@@ -9,7 +9,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 
 # ------------------------------------------------------------
-# ຟັງຊັນຄຳນວນ FCS ແລະ ຕັດສິນໃຈ (ຄືເກົ່າ, ຮັກສາໄວ້)
+# FCS Calculation (V13.8) – same as before
 # ------------------------------------------------------------
 def calculate_fcs(match_data):
     si = max(0.90, min(1.10, 0.90 + (abs(match_data['home_rank'] - match_data['away_rank']) * 0.02)))
@@ -81,14 +81,11 @@ def get_decision(fcs, league):
             return 'ຮອງ'
 
 # ------------------------------------------------------------
-# ຟັງຊັນດຶງຂໍ້ມູນຈາກ URL ທີ່ກຳນົດ (ໂດຍສະເພາະ 7mth2)
+# Scrape from iframe (updated)
 # ------------------------------------------------------------
-def scrape_7mth2_live(headless=True, timeout=25):
-    """
-    ດຶງຂໍ້ມູນສົດຈາກ freelive.7mth2.com ຕາມ URL ທີ່ທ່ານໃຫ້ມາ.
-    ຄືນ DataFrame ຂອງຂໍ້ມູນດິບ ແລະ ເນື້ອໃນ HTML ທີ່ປຸງແຕ່ງແລ້ວ.
-    """
-    url = "https://freelive.7mth2.com/live.aspx?mark=th&TimeZone=%2B0700&wordAd=&wadurl=//&width=700&cpageBgColor=FFFFFF&tableFontSize=11&cborderColor=DDDDDD&ctdColor1=FFFFFF&ctdColor2=E0E9F6&clinkColor=0044DD&cdateFontColor=333333&cdateBgColor=FFFFFF&scoreFontSize=12&cteamFontColor=000000&cgoalFontColor=FF0000&cgoalBgColor=FFFFE1&cremarkFontColor=0000FF&cremarkBgColor=F7F8F3&Skins=10&teamWeight=400&scoreWeight=700&goalWeight=400&fontWeight=700&DSTbox="
+def scrape_7mth_live_with_iframe(headless=True, timeout=25):
+    # This is the main page that contains the iframe
+    main_url = "https://freelive.7mth2.com/live.aspx?mark=th&TimeZone=%2B0700&wordAd=&wadurl=//&width=700&cpageBgColor=FFFFFF&tableFontSize=11&cborderColor=DDDDDD&ctdColor1=FFFFFF&ctdColor2=E0E9F6&clinkColor=0044DD&cdateFontColor=333333&cdateBgColor=FFFFFF&scoreFontSize=12&cteamFontColor=000000&cgoalFontColor=FF0000&cgoalBgColor=FFFFE1&cremarkFontColor=0000FF&cremarkBgColor=F7F8F3&Skins=10&teamWeight=400&scoreWeight=700&goalWeight=400&fontWeight=700&DSTbox="
     
     options = Options()
     if headless:
@@ -99,19 +96,35 @@ def scrape_7mth2_live(headless=True, timeout=25):
     options.add_experimental_option('excludeSwitches', ['enable-automation'])
     
     driver = webdriver.Chrome(options=options)
-    driver.get(url)
+    driver.get(main_url)
     
-    # ລໍຖ້າໃຫ້ຕາຕະລາງທີ່ມີ id="live_Table" ປາກົດ (ກົງກັບ source code ຂອງ 7mth)
+    # Wait for iframe to be present
+    try:
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.TAG_NAME, "iframe"))
+        )
+        print("✅ Iframe found")
+    except:
+        print("⚠️ No iframe found – maybe table is directly on page")
+    
+    # Switch to the iframe (there is usually only one)
+    iframes = driver.find_elements(By.TAG_NAME, "iframe")
+    if iframes:
+        driver.switch_to.frame(iframes[0])
+        print("🔁 Switched to iframe")
+    else:
+        print("⚠️ No iframe to switch, continuing with main page")
+    
+    # Wait for the live table inside the iframe
     try:
         WebDriverWait(driver, timeout).until(
             EC.presence_of_element_located((By.ID, "live_Table"))
         )
-        print("✅ ພົບຕາຕະລາງ live_Table")
+        print("✅ Found live_Table inside iframe")
     except:
-        print("⚠️ ບໍ່ພົບ live_Table, ລອງຊອກຫາຕາຕະລາງອື່ນ...")
+        print("⚠️ live_Table not found, will search for any table")
     
-    # ລໍຖ້າເພີ່ມເລັກນ້ອຍເພື່ອໃຫ້ JavaScript ສ້າງແຖວຂໍ້ມູນສຳເລັດ
-    time.sleep(3)
+    time.sleep(3)  # extra wait for dynamic JS updates
     
     html = driver.page_source
     driver.quit()
@@ -119,57 +132,45 @@ def scrape_7mth2_live(headless=True, timeout=25):
     soup = BeautifulSoup(html, 'html.parser')
     table = soup.find('table', id='live_Table')
     if not table:
-        # ຫາຕາຕະລາງທີ່ມີຂໍ້ມູນນັດອາດຊື່ອື່ນ
         table = soup.find('table', class_='live-table')
     if not table:
         tables = soup.find_all('table')
         if tables:
             table = max(tables, key=lambda t: len(t.find_all('tr')))
         else:
-            raise Exception("ບໍ່ພົບຕາຕະລາງໃນໜ້າເວັບ")
+            raise Exception("No table found inside iframe")
     
     df = pd.read_html(str(table))[0]
     return df, soup
 
 # ------------------------------------------------------------
-# ຟັງຊັນແປງຂໍ້ມູນຈາກ DataFrame ຂອງ 7mth2 ໃຫ້ເປັນຮູບແບບທີ່ FCS ຕ້ອງການ
+# Parse raw DataFrame row to match dict (you MUST adjust this)
 # ------------------------------------------------------------
-def parse_7mth2_row_to_match(row_dict, league_name="7mth2"):
+def parse_row_to_match(row_dict, league_name="7mth"):
     """
-    ປັບຟັງຊັນນີ້ຕາມຊື່ຄໍລຳທີ່ພົບໃນຕາຕະລາງຈິງ.
-    ທ່ານສາມາດດຶງຂໍ້ມູນເພີ່ມເຕີມ (ອັນດັບ, ຟອມ, ປະຕູ) ຈາກລິ້ງລາຍລະອຽດນັດຖ້າຕ້ອງການ.
+    IMPORTANT: Run the script once, look at printed column names,
+    then edit this function to use the correct column names.
     """
-    # ສົມມຸດວ່າ DataFrame ມີຄໍລຳຢ່າງນ້ອຍ: ['เวลา', 'เจ้าบ้าน', 'แต้ม', 'ทีมเยือน', 'แต้มต่อ', 'ราคาบอล']
-    # ທ່ານຄວນແລ່ນ script ກ່ອນເພື່ອເບິ່ງຊື່ຄໍລຳຕົວຈິງ (ພວກມັນຈະອອກເປັນພາສາໄທ ຫຼື ອັງກິດ)
+    # Example column names (Thai/English mix – change after inspection)
     home_team = row_dict.get('เจ้าบ้าน', row_dict.get('Home', ''))
     away_team = row_dict.get('ทีมเยือน', row_dict.get('Away', ''))
-    score = row_dict.get('แต้ม', row_dict.get('Score', '0-0'))
     handicap = row_dict.get('แต้มต่อ', row_dict.get('Hdp', '0'))
     
-    # ກຳນົດທີມຕໍ່ຈາກ handicap (ເຄື່ອງໝາຍ '-' ໝາຍເຖິງເຈົ້າບ້ານຕໍ່)
-    if isinstance(handicap, str):
-        is_home_favorite = '-' in handicap
-    else:
-        is_home_favorite = False  # ຖ້າບໍ່ມີຂໍ້ມູນໃຫ້ຕັ້ງເປັນທີມບ້ານຮອງ
+    # Determine favorite from handicap ( '-' means home favorite)
+    is_home_favorite = '-' in str(handicap) if handicap else False
     
-    # ອັນດັບ (ຕ້ອງການຂໍ້ມູນຈາກແຫຼ່ງອື່ນ, ຕົວຢ່າງນີ້ໃຊ້ຄ່າເລີ່ມຕົ້ນ)
-    home_rank = extract_rank(row_dict.get('อันดับเจ้าบ้าน', row_dict.get('HomeRank', '10')))
-    away_rank = extract_rank(row_dict.get('อันดับทีมเยือน', row_dict.get('AwayRank', '10')))
+    # Placeholder values – you should fetch real data from detail pages
+    home_rank = 10
+    away_rank = 10
+    home_form = ['D','D','D','D','D']
+    away_form = ['D','D','D','D','D']
+    home_gf = 1.2
+    home_ga = 1.0
+    away_gf = 1.2
+    away_ga = 1.0
+    fav_odds = 1.85
     
-    # ຟອມ 5 ນັດ (ຕ້ອງດຶງຈາກລິ້ງລາຍລະອຽດ ຫຼື ກຳນົດເອງ)
-    home_form = parse_form_string(row_dict.get('ฟอร์มเจ้าบ้าน', row_dict.get('HomeForm', 'DDDDD')))
-    away_form = parse_form_string(row_dict.get('ฟอร์มทีมเยือน', row_dict.get('AwayForm', 'DDDDD')))
-    
-    # ປະຕູເສລີ່ຍ (ຕ້ອງການຂໍ້ມູນສະຖິຕິລີກ, ແທນທີ່ດ້ວຍຄ່າສະເລ່ຍລວມ)
-    home_gf = extract_goals_avg(row_dict.get('ประตูเจ้าบ้าน', row_dict.get('HomeGF', '1.2')))
-    home_ga = extract_goals_avg(row_dict.get('เสียเจ้าบ้าน', row_dict.get('HomeGA', '1.0')))
-    away_gf = extract_goals_avg(row_dict.get('ประตูทีมเยือน', row_dict.get('AwayGF', '1.2')))
-    away_ga = extract_goals_avg(row_dict.get('เสียทีมเยือน', row_dict.get('AwayGA', '1.0')))
-    
-    # Odds ເລີ່ມຕົ້ນຂອງທີມຕໍ່ (ຄໍລຳນີ້ອາດຊື່ 'ราคาบอล' ຫຼື 'O1')
-    fav_odds = extract_odds(row_dict.get('ราคาบอล', row_dict.get('FavOdds', '1.85')))
-    
-    match = {
+    return {
         'league': league_name,
         'home_team': home_team,
         'away_team': away_team,
@@ -181,81 +182,51 @@ def parse_7mth2_row_to_match(row_dict, league_name="7mth2"):
         'home_ga': home_ga,
         'away_gf': away_gf,
         'away_ga': away_ga,
-        'h2h_matches': [],   # ສາມາດເພີ່ມພາຍຫຼັງໄດ້
+        'h2h_matches': [],
         'is_home_favorite': is_home_favorite,
         'favorite_initial_odds': fav_odds,
         'error_count': 0
     }
-    return match
-
-def extract_rank(text):
-    try:
-        return int(re.search(r'\d+', str(text)).group())
-    except:
-        return 10
-
-def parse_form_string(form_str):
-    form_str = str(form_str).upper()
-    return [ch for ch in form_str if ch in 'WDL']
-
-def extract_goals_avg(val):
-    try:
-        return float(re.search(r'[\d\.]+', str(val)).group())
-    except:
-        return 1.0
-
-def extract_odds(val):
-    try:
-        return float(re.search(r'[\d\.]+', str(val)).group())
-    except:
-        return 1.85
 
 # ------------------------------------------------------------
-# ຟັງຊັນຫຼັກ: ດຶງຂໍ້ມູນຈາກ 7mth2 ແລະ ວິເຄາະອັດຕະໂນມັດ
+# Main automation
 # ------------------------------------------------------------
-def auto_analyze_7mth2():
-    print("📥 ກຳລັງເປີດ 7mth2.com ແລະ ດຶງຂໍ້ມູນ...")
-    df_raw, soup = scrape_7mth2_live(headless=True)
-    print(f"✅ ດຶງຂໍ້ມູນສຳເລັດ: {len(df_raw)} ແຖວ")
+def auto_analyze():
+    print("📥 Loading 7mth live data (with iframe)...")
+    df_raw, _ = scrape_7mth_live_with_iframe(headless=True)
+    print(f"✅ Raw rows: {len(df_raw)}")
     
-    print("\n📋 ຕົວຢ່າງ 5 ແຖວທຳອິດ (ເພື່ອເບິ່ງໂຄງສ້າງ):")
-    print(df_raw.head())
-    print("\n📋 ລາຍຊື່ຄໍລຳທີ່ພົບ:")
+    print("\n📋 First 3 rows (to see structure):")
+    print(df_raw.head(3))
+    print("\n📋 Column names:")
     print(df_raw.columns.tolist())
     
-    # ແປງແຕ່ລະແຖວ
     matches = []
     for idx, row in df_raw.iterrows():
         try:
-            match = parse_7mth2_row_to_match(row.to_dict())
+            match = parse_row_to_match(row.to_dict())
             matches.append(match)
         except Exception as e:
-            print(f"⚠️ ຂ້າມແຖວ {idx} ຍ້ອນ: {e}")
+            print(f"⚠️ Skip row {idx}: {e}")
     
-    # ຄຳນວນ FCS ແລະ ຕັດສິນໃຈ
     results = []
     for m in matches:
         fcs = calculate_fcs(m)
         decision = get_decision(fcs, m['league'])
         results.append({
-            'ລີກ': m['league'],
-            'ເຈົ້າບ້ານ': m['home_team'],
-            'ທີມຢາມ': m['away_team'],
+            'League': m['league'],
+            'Home': m['home_team'],
+            'Away': m['away_team'],
             'FCS': round(fcs, 2),
-            'ຄຳແນະນຳ': decision
+            'Decision': decision
         })
     
     df_result = pd.DataFrame(results)
     return df_result
 
-# ------------------------------------------------------------
-# ເມື່ອຮຽກໃຊ້ໂດຍກົງ
-# ------------------------------------------------------------
 if __name__ == "__main__":
-    result_df = auto_analyze_7mth2()
-    
-    print("\n📊 **ຜົນການວິເຄາະອັດຕະໂນມັດ (FCS V13.8)**")
-    print(result_df.to_string(index=False))
-    
-    result_df.to_csv("7mth2_analysis.csv", index=False, encoding='utf-8-sig')
-    print("\n💾 ບັນທຶກຜົນໄວ້ທີ່ 7mth2_analysis.csv")
+    df = auto_analyze()
+    print("\n📊 Final Analysis (V13.8):")
+    print(df.to_string(index=False))
+    df.to_csv("7mth_iframe_analysis.csv", index=False, encoding='utf-8-sig')
+    print("\n💾 Saved to 7mth_iframe_analysis.csv")
