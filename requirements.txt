@@ -3,9 +3,6 @@ pandas
 requests
 beautifulsoup4
 playwright
-pip 
-install
-selenium
-lxml
+
 
 
